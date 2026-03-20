@@ -71,7 +71,7 @@ function getDayOfWeekSunday0(dateStr) {
 function formatHourLabel(hour24) {
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   const ampm = hour24 < 12 ? "AM" : "PM";
-  return `${hour12.toString().padStart(2, "0")}:00 ${ampm}`;
+  return `${hour12.toString().padStart(2, "0")}${ampm}`;
 }
 
 function average(values) {
