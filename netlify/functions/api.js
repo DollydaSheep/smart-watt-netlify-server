@@ -106,15 +106,29 @@ function getMonthBounds(dateStr) {
 }
 
 async function fetchRows(startIso, endIso) {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select("recorded_at, power_w")
-    .gte("recorded_at", startIso)
-    .lt("recorded_at", endIso)
-    .order("recorded_at", { ascending: true });
+  const pageSize = 1000;
+  let from = 0;
+  let allRows = [];
 
-  if (error) throw error;
-  return data || [];
+  while (true) {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("recorded_at, power_w")
+      .gte("recorded_at", startIso)
+      .lt("recorded_at", endIso)
+      .order("recorded_at", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allRows = allRows.concat(data);
+
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
 }
 
 function getLocalHourAndDate(isoString, timeZone = DEFAULT_TZ) {
