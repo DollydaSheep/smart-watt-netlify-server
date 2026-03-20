@@ -82,6 +82,15 @@ function formatHourLabel(hour24) {
   return `${hour12.toString()}${ampm}`;
 }
 
+function totalEnergyKwhFromMinuteReadings(values) {
+  if (!values.length) return null;
+
+  const sumPowerW = values.reduce((a, b) => a + b, 0);
+  const kwh = sumPowerW / 60000;
+
+  return Number(kwh.toFixed(4));
+}
+
 function average(values) {
   if (!values.length) return null;
   const sum = values.reduce((a, b) => a + b, 0);
@@ -229,15 +238,7 @@ router.get("/power/weekly", async (req, res) => {
     const startIso = toUtcISOStringFromLocal(sunday, 0, 0, 0, tz);
     const endIso = toUtcISOStringFromLocal(nextSunday, 0, 0, 0, tz);
 
-    console.log("anchorDate:", anchorDate);
-    console.log("sunday:", sunday);
-    console.log("nextSunday:", nextSunday);
-    console.log("startIso:", startIso);
-    console.log("endIso:", endIso);
-
     const rows = await fetchRows(startIso, endIso);
-
-    console.log("weekly rows count:", rows.length);
 
     const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const dayMap = {};
@@ -263,14 +264,13 @@ router.get("/power/weekly", async (req, res) => {
       data.push({
         label: labels[i],
         date: d,
-        power_w: average(dayMap[d]),
+        energy_kwh: totalEnergyKwhFromMinuteReadings(dayMap[d]),
       });
     }
 
-    console.log("weekly data:", data);
-
     res.json({
       period: "weekly",
+      metric: "energy_kwh",
       anchorDate,
       weekStart: sunday,
       weekEnd: addDays(sunday, 6),
@@ -306,7 +306,9 @@ router.get("/power/monthly", async (req, res) => {
 
     for (const row of rows) {
       if (row.power_w == null) continue;
+
       const local = getLocalHourAndDate(row.recorded_at, tz);
+
       if (dayMap[local.date]) {
         dayMap[local.date].push(Number(row.power_w));
       }
@@ -318,12 +320,13 @@ router.get("/power/monthly", async (req, res) => {
       data.push({
         label: String(day),
         date: d,
-        power_w: average(dayMap[d]),
+        energy_kwh: totalEnergyKwhFromMinuteReadings(dayMap[d]),
       });
     }
 
     res.json({
       period: "monthly",
+      metric: "energy_kwh",
       anchorDate,
       monthStart,
       monthEnd: `${monthStart.slice(0, 8)}${String(lastDay).padStart(2, "0")}`,
