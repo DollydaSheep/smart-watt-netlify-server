@@ -195,6 +195,7 @@ router.get("/power/daily", async (req, res) => {
 
     for (const row of rows) {
       if (row.power_w == null) continue;
+
       const local = getLocalHourAndDate(row.recorded_at, tz);
       if (local.date !== date) continue;
 
@@ -208,12 +209,13 @@ router.get("/power/daily", async (req, res) => {
     for (let h = 0; h < 24; h += 2) {
       data.push({
         label: formatHourLabel(h),
-        power_w: average(buckets[h]),
+        energy_kwh: totalEnergyKwhFromMinuteReadings(buckets[h]),
       });
     }
 
     res.json({
       period: "daily",
+      metric: "energy_kwh",
       date,
       timezone: tz,
       data,
