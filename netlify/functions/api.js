@@ -129,6 +129,10 @@ function getLocalHourAndDate(isoString, timeZone = DEFAULT_TZ) {
   };
 }
 
+app.get("/", (_req, res) => {
+  res.json({ ok: true, message: "API root works" });
+});
+
 app.get("/health", async (_req, res) => {
   try {
     const { error } = await supabase.from(TABLE).select("id").limit(1);
