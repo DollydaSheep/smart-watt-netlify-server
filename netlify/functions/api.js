@@ -7,6 +7,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+const router = express.Router();
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -129,11 +130,11 @@ function getLocalHourAndDate(isoString, timeZone = DEFAULT_TZ) {
   };
 }
 
-app.get("/", (_req, res) => {
+router.get("/", (_req, res) => {
   res.json({ ok: true, message: "API root works" });
 });
 
-app.get("/health", async (_req, res) => {
+router.get("/health", async (_req, res) => {
   try {
     const { error } = await supabase.from(TABLE).select("id").limit(1);
     if (error) throw error;
@@ -146,7 +147,7 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-app.get("/power/daily", async (req, res) => {
+router.get("/power/daily", async (req, res) => {
   try {
     const tz = req.query.tz || DEFAULT_TZ;
     const date = getDateString(req.query.date, tz);
@@ -194,7 +195,7 @@ app.get("/power/daily", async (req, res) => {
   }
 });
 
-app.get("/power/weekly", async (req, res) => {
+router.get("/power/weekly", async (req, res) => {
   try {
     const tz = req.query.tz || DEFAULT_TZ;
     const anchorDate = getDateString(req.query.date, tz);
@@ -250,7 +251,7 @@ app.get("/power/weekly", async (req, res) => {
   }
 });
 
-app.get("/power/monthly", async (req, res) => {
+router.get("/power/monthly", async (req, res) => {
   try {
     const tz = req.query.tz || DEFAULT_TZ;
     const anchorDate = getDateString(req.query.date, tz);
@@ -301,5 +302,7 @@ app.get("/power/monthly", async (req, res) => {
     });
   }
 });
+
+app.use('/.netlify/functions/api', router);
 
 module.exports.handler = serverless(app);
