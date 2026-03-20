@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "main": "netlify/functions/api.js",
   "scripts": {
-    "dev": "netlify dev"
+    "dev": "netlify dev",
+    "start": "./node-modules/.bin/netlify-lambda serve src",
+    "build": "./node-modules/.bin/netlify-lambda build src"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "netlify-lambda": "^2.0.16",
     "pg": "^8.20.0",
     "serverless-http": "^4.0.0"
   }
