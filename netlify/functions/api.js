@@ -215,7 +215,15 @@ router.get("/power/weekly", async (req, res) => {
     const startIso = toUtcISOStringFromLocal(sunday, 0, 0, 0, tz);
     const endIso = toUtcISOStringFromLocal(nextSunday, 0, 0, 0, tz);
 
+    console.log("anchorDate:", anchorDate);
+    console.log("sunday:", sunday);
+    console.log("nextSunday:", nextSunday);
+    console.log("startIso:", startIso);
+    console.log("endIso:", endIso);
+
     const rows = await fetchRows(startIso, endIso);
+
+    console.log("weekly rows count:", rows.length);
 
     const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const dayMap = {};
@@ -227,7 +235,9 @@ router.get("/power/weekly", async (req, res) => {
 
     for (const row of rows) {
       if (row.power_w == null) continue;
+
       const local = getLocalHourAndDate(row.recorded_at, tz);
+
       if (dayMap[local.date]) {
         dayMap[local.date].push(Number(row.power_w));
       }
@@ -243,6 +253,8 @@ router.get("/power/weekly", async (req, res) => {
       });
     }
 
+    console.log("weekly data:", data);
+
     res.json({
       period: "weekly",
       anchorDate,
@@ -252,6 +264,7 @@ router.get("/power/weekly", async (req, res) => {
       data,
     });
   } catch (err) {
+    console.error("weekly route error:", err);
     res.status(500).json({
       ok: false,
       error: err.message,
