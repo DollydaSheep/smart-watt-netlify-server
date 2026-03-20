@@ -50,8 +50,16 @@ function parseDateOnly(yyyyMmDd) {
   return { year, month, day };
 }
 
-function toUtcISOStringFromLocal(dateStr, hour = 0, minute = 0, second = 0) {
+function toUtcISOStringFromLocal(dateStr, hour = 0, minute = 0, second = 0, tz = DEFAULT_TZ) {
   const [year, month, day] = dateStr.split("-").map(Number);
+
+  // current app assumes Asia/Manila
+  if (tz === "Asia/Manila") {
+    const utc = new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second));
+    return utc.toISOString();
+  }
+
+  // fallback
   const utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   return utc.toISOString();
 }
@@ -71,7 +79,7 @@ function getDayOfWeekSunday0(dateStr) {
 function formatHourLabel(hour24) {
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   const ampm = hour24 < 12 ? "AM" : "PM";
-  return `${hour12.toString().padStart(2, "0")}${ampm}`;
+  return `${hour12.toString()}${ampm}`;
 }
 
 function average(values) {
@@ -152,8 +160,8 @@ router.get("/power/daily", async (req, res) => {
     const tz = req.query.tz || DEFAULT_TZ;
     const date = getDateString(req.query.date, tz);
 
-    const startIso = toUtcISOStringFromLocal(date, 0, 0, 0);
-    const endIso = toUtcISOStringFromLocal(addDays(date, 1), 0, 0, 0);
+    const startIso = toUtcISOStringFromLocal(date, 0, 0, 0, tz);
+    const endIso = toUtcISOStringFromLocal(addDays(date, 1), 0, 0, 0, tz);
 
     const rows = await fetchRows(startIso, endIso);
 
@@ -204,8 +212,8 @@ router.get("/power/weekly", async (req, res) => {
     const sunday = addDays(anchorDate, -dow);
     const nextSunday = addDays(sunday, 7);
 
-    const startIso = toUtcISOStringFromLocal(sunday, 0, 0, 0);
-    const endIso = toUtcISOStringFromLocal(nextSunday, 0, 0, 0);
+    const startIso = toUtcISOStringFromLocal(sunday, 0, 0, 0, tz);
+    const endIso = toUtcISOStringFromLocal(nextSunday, 0, 0, 0, tz);
 
     const rows = await fetchRows(startIso, endIso);
 
@@ -258,8 +266,8 @@ router.get("/power/monthly", async (req, res) => {
 
     const { monthStart, nextMonthStart, lastDay } = getMonthBounds(anchorDate);
 
-    const startIso = toUtcISOStringFromLocal(monthStart, 0, 0, 0);
-    const endIso = toUtcISOStringFromLocal(nextMonthStart, 0, 0, 0);
+    const startIso = toUtcISOStringFromLocal(monthStart, 0, 0, 0, tz);
+    const endIso = toUtcISOStringFromLocal(nextMonthStart, 0, 0, 0, tz);
 
     const rows = await fetchRows(startIso, endIso);
 
