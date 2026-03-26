@@ -14,7 +14,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const RAW_TABLE = "energy_readings_aggregate";
 const DAILY_TABLE = "energy_readings_aggregate_daily";
 const DEFAULT_TZ = "Asia/Manila";
 
@@ -51,18 +50,6 @@ function parseDateOnly(yyyyMmDd) {
   return { year, month, day };
 }
 
-function toUtcISOStringFromLocal(dateStr, hour = 0, minute = 0, second = 0, tz = DEFAULT_TZ) {
-  const [year, month, day] = dateStr.split("-").map(Number);
-
-  if (tz === "Asia/Manila") {
-    const utc = new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second));
-    return utc.toISOString();
-  }
-
-  const utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  return utc.toISOString();
-}
-
 function addDays(dateStr, days) {
   const { year, month, day } = parseDateOnly(dateStr);
   const d = new Date(Date.UTC(year, month - 1, day));
@@ -79,12 +66,6 @@ function formatHourLabel(hour24) {
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
   const ampm = hour24 < 12 ? "AM" : "PM";
   return `${hour12}${ampm}`;
-}
-
-function sumEnergyKwh(values) {
-  if (!values.length) return 0;
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return Number(total.toFixed(4));
 }
 
 function getMonthBounds(dateStr) {
@@ -104,32 +85,6 @@ function getMonthBounds(dateStr) {
   };
 }
 
-async function fetchRawRows(startIso, endIso) {
-  const pageSize = 1000;
-  let from = 0;
-  let allRows = [];
-
-  while (true) {
-    const { data, error } = await supabase
-      .from(RAW_TABLE)
-      .select("recorded_at, power_w, energy_kwh")
-      .gte("recorded_at", startIso)
-      .lt("recorded_at", endIso)
-      .order("recorded_at", { ascending: true })
-      .range(from, from + pageSize - 1);
-
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-
-    allRows = allRows.concat(data);
-
-    if (data.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return allRows;
-}
-
 async function fetchDailyAggregateRows(startDate, endDate) {
   const pageSize = 1000;
   let from = 0;
@@ -138,7 +93,9 @@ async function fetchDailyAggregateRows(startDate, endDate) {
   while (true) {
     const { data, error } = await supabase
       .from(DAILY_TABLE)
-      .select("reading_date, avg_power_w, avg_voltage, avg_current, total_energy_kwh")
+      .select(
+        "reading_date, avg_power_w, avg_voltage, avg_current, total_energy_kwh, hourly_power_w_avg, hourly_kwh"
+      )
       .gte("reading_date", startDate)
       .lt("reading_date", endDate)
       .order("reading_date", { ascending: true })
@@ -156,25 +113,23 @@ async function fetchDailyAggregateRows(startDate, endDate) {
   return allRows;
 }
 
-function getLocalHourAndDate(isoString, timeZone = DEFAULT_TZ) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(isoString));
+async function fetchDailyAggregateRow(date) {
+  const { data, error } = await supabase
+    .from(DAILY_TABLE)
+    .select(
+      "reading_date, avg_power_w, avg_voltage, avg_current, total_energy_kwh, hourly_power_w_avg, hourly_kwh"
+    )
+    .eq("reading_date", date)
+    .maybeSingle();
 
-  const map = {};
-  for (const p of parts) {
-    map[p.type] = p.value;
-  }
+  if (error) throw error;
+  return data;
+}
 
-  return {
-    date: `${map.year}-${map.month}-${map.day}`,
-    hour: Number(map.hour),
-  };
+function getJsonNumber(obj, key) {
+  if (!obj || typeof obj !== "object") return 0;
+  const value = obj[key];
+  return Number(value || 0);
 }
 
 router.get("/", (_req, res) => {
@@ -183,8 +138,13 @@ router.get("/", (_req, res) => {
 
 router.get("/health", async (_req, res) => {
   try {
-    const { error } = await supabase.from(RAW_TABLE).select("id").limit(1);
+    const { error } = await supabase
+      .from(DAILY_TABLE)
+      .select("reading_date")
+      .limit(1);
+
     if (error) throw error;
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({
@@ -199,46 +159,41 @@ router.get("/power/daily", async (req, res) => {
     const tz = req.query.tz || DEFAULT_TZ;
     const date = getDateString(req.query.date, tz);
 
-    const startIso = toUtcISOStringFromLocal(date, 0, 0, 0, tz);
-    const endIso = toUtcISOStringFromLocal(addDays(date, 1), 0, 0, 0, tz);
+    const row = await fetchDailyAggregateRow(date);
 
-    const rows = await fetchRawRows(startIso, endIso);
-
-    const buckets = {};
-    const totalEnergyValues = [];
-
-    for (let h = 0; h < 24; h += 2) {
-      buckets[h] = [];
-    }
-
-    for (const row of rows) {
-      const local = getLocalHourAndDate(row.recorded_at, tz);
-      if (local.date !== date) continue;
-
-      const energy = Number(row.energy_kwh || 0);
-      totalEnergyValues.push(energy);
-
-      const bucketHour = Math.floor(local.hour / 2) * 2;
-      if (buckets[bucketHour]) {
-        buckets[bucketHour].push(energy);
-      }
-    }
+    const hourlyKwh = row?.hourly_kwh || {};
+    const hourlyPowerAvg = row?.hourly_power_w_avg || {};
 
     const data = [];
     for (let h = 0; h < 24; h += 2) {
+      const h1 = `${String(h).padStart(2, "0")}:00`;
+      const h2 = `${String(h + 1).padStart(2, "0")}:00`;
+
       data.push({
         label: formatHourLabel(h),
-        energy_kwh: sumEnergyKwh(buckets[h]),
+        start_hour: h1,
+        end_hour: h2,
+        energy_kwh: Number(
+          (getJsonNumber(hourlyKwh, h1) + getJsonNumber(hourlyKwh, h2)).toFixed(6)
+        ),
+        avg_power_w: Number(
+          (
+            (getJsonNumber(hourlyPowerAvg, h1) + getJsonNumber(hourlyPowerAvg, h2)) / 2
+          ).toFixed(4)
+        ),
       });
     }
 
     res.json({
       period: "daily",
       metric: "energy_kwh",
-      source_table: RAW_TABLE,
+      source_table: DAILY_TABLE,
       date,
       timezone: tz,
-      total_energy_kwh: sumEnergyKwh(totalEnergyValues),
+      total_energy_kwh: Number(row?.total_energy_kwh || 0),
+      avg_power_w: Number(row?.avg_power_w || 0),
+      avg_voltage: Number(row?.avg_voltage || 0),
+      avg_current: Number(row?.avg_current || 0),
       data,
     });
   } catch (err) {
