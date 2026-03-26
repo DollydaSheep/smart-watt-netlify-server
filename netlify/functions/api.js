@@ -14,7 +14,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const TABLE = "energy_readings_aggregate";
+const RAW_TABLE = "energy_readings_aggregate";
+const DAILY_TABLE = "energy_readings_aggregate_daily";
 const DEFAULT_TZ = "Asia/Manila";
 
 function getLocalDateParts(date = new Date(), timeZone = DEFAULT_TZ) {
@@ -103,18 +104,44 @@ function getMonthBounds(dateStr) {
   };
 }
 
-async function fetchRows(startIso, endIso) {
+async function fetchRawRows(startIso, endIso) {
   const pageSize = 1000;
   let from = 0;
   let allRows = [];
 
   while (true) {
     const { data, error } = await supabase
-      .from(TABLE)
+      .from(RAW_TABLE)
       .select("recorded_at, power_w, energy_kwh")
       .gte("recorded_at", startIso)
       .lt("recorded_at", endIso)
       .order("recorded_at", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allRows = allRows.concat(data);
+
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+}
+
+async function fetchDailyAggregateRows(startDate, endDate) {
+  const pageSize = 1000;
+  let from = 0;
+  let allRows = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from(DAILY_TABLE)
+      .select("reading_date, avg_power_w, avg_voltage, avg_current, total_energy_kwh")
+      .gte("reading_date", startDate)
+      .lt("reading_date", endDate)
+      .order("reading_date", { ascending: true })
       .range(from, from + pageSize - 1);
 
     if (error) throw error;
@@ -156,7 +183,7 @@ router.get("/", (_req, res) => {
 
 router.get("/health", async (_req, res) => {
   try {
-    const { error } = await supabase.from(TABLE).select("id").limit(1);
+    const { error } = await supabase.from(RAW_TABLE).select("id").limit(1);
     if (error) throw error;
     res.json({ ok: true });
   } catch (err) {
@@ -175,7 +202,7 @@ router.get("/power/daily", async (req, res) => {
     const startIso = toUtcISOStringFromLocal(date, 0, 0, 0, tz);
     const endIso = toUtcISOStringFromLocal(addDays(date, 1), 0, 0, 0, tz);
 
-    const rows = await fetchRows(startIso, endIso);
+    const rows = await fetchRawRows(startIso, endIso);
 
     const buckets = {};
     const totalEnergyValues = [];
@@ -208,6 +235,7 @@ router.get("/power/daily", async (req, res) => {
     res.json({
       period: "daily",
       metric: "energy_kwh",
+      source_table: RAW_TABLE,
       date,
       timezone: tz,
       total_energy_kwh: sumEnergyKwh(totalEnergyValues),
@@ -230,48 +258,41 @@ router.get("/power/weekly", async (req, res) => {
     const sunday = addDays(anchorDate, -dow);
     const nextSunday = addDays(sunday, 7);
 
-    const startIso = toUtcISOStringFromLocal(sunday, 0, 0, 0, tz);
-    const endIso = toUtcISOStringFromLocal(nextSunday, 0, 0, 0, tz);
-
-    const rows = await fetchRows(startIso, endIso);
+    const rows = await fetchDailyAggregateRows(sunday, nextSunday);
 
     const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const dayMap = {};
-    const totalEnergyValues = [];
-
-    for (let i = 0; i < 7; i++) {
-      const d = addDays(sunday, i);
-      dayMap[d] = [];
-    }
+    const rowMap = {};
+    let totalEnergy = 0;
 
     for (const row of rows) {
-      const local = getLocalHourAndDate(row.recorded_at, tz);
-      const energy = Number(row.energy_kwh || 0);
-
-      if (dayMap[local.date]) {
-        dayMap[local.date].push(energy);
-        totalEnergyValues.push(energy);
-      }
+      rowMap[row.reading_date] = row;
+      totalEnergy += Number(row.total_energy_kwh || 0);
     }
 
     const data = [];
     for (let i = 0; i < 7; i++) {
       const d = addDays(sunday, i);
+      const row = rowMap[d];
+
       data.push({
         label: labels[i],
         date: d,
-        energy_kwh: sumEnergyKwh(dayMap[d]),
+        energy_kwh: Number(row?.total_energy_kwh || 0),
+        avg_power_w: Number(row?.avg_power_w || 0),
+        avg_voltage: Number(row?.avg_voltage || 0),
+        avg_current: Number(row?.avg_current || 0),
       });
     }
 
     res.json({
       period: "weekly",
       metric: "energy_kwh",
+      source_table: DAILY_TABLE,
       anchorDate,
       weekStart: sunday,
       weekEnd: addDays(sunday, 6),
       timezone: tz,
-      total_energy_kwh: sumEnergyKwh(totalEnergyValues),
+      total_energy_kwh: Number(totalEnergy.toFixed(4)),
       data,
     });
   } catch (err) {
@@ -290,47 +311,40 @@ router.get("/power/monthly", async (req, res) => {
 
     const { monthStart, nextMonthStart, lastDay } = getMonthBounds(anchorDate);
 
-    const startIso = toUtcISOStringFromLocal(monthStart, 0, 0, 0, tz);
-    const endIso = toUtcISOStringFromLocal(nextMonthStart, 0, 0, 0, tz);
+    const rows = await fetchDailyAggregateRows(monthStart, nextMonthStart);
 
-    const rows = await fetchRows(startIso, endIso);
-
-    const dayMap = {};
-    const totalEnergyValues = [];
-
-    for (let day = 1; day <= lastDay; day++) {
-      const d = `${monthStart.slice(0, 8)}${String(day).padStart(2, "0")}`;
-      dayMap[d] = [];
-    }
+    const rowMap = {};
+    let totalEnergy = 0;
 
     for (const row of rows) {
-      const local = getLocalHourAndDate(row.recorded_at, tz);
-      const energy = Number(row.energy_kwh || 0);
-
-      if (dayMap[local.date]) {
-        dayMap[local.date].push(energy);
-        totalEnergyValues.push(energy);
-      }
+      rowMap[row.reading_date] = row;
+      totalEnergy += Number(row.total_energy_kwh || 0);
     }
 
     const data = [];
     for (let day = 1; day <= lastDay; day++) {
       const d = `${monthStart.slice(0, 8)}${String(day).padStart(2, "0")}`;
+      const row = rowMap[d];
+
       data.push({
         label: String(day),
         date: d,
-        energy_kwh: sumEnergyKwh(dayMap[d]),
+        energy_kwh: Number(row?.total_energy_kwh || 0),
+        avg_power_w: Number(row?.avg_power_w || 0),
+        avg_voltage: Number(row?.avg_voltage || 0),
+        avg_current: Number(row?.avg_current || 0),
       });
     }
 
     res.json({
       period: "monthly",
       metric: "energy_kwh",
+      source_table: DAILY_TABLE,
       anchorDate,
       monthStart,
       monthEnd: `${monthStart.slice(0, 8)}${String(lastDay).padStart(2, "0")}`,
       timezone: tz,
-      total_energy_kwh: sumEnergyKwh(totalEnergyValues),
+      total_energy_kwh: Number(totalEnergy.toFixed(4)),
       data,
     });
   } catch (err) {
