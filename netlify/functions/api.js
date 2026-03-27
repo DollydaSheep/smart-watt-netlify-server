@@ -155,11 +155,10 @@ function buildDailyChartData(row) {
       energy_kwh: Number(
         (getJsonNumber(hourlyKwh, h1) + getJsonNumber(hourlyKwh, h2)).toFixed(6)
       ),
-      avg_power_w: Number(
-        (
-          (getJsonNumber(hourlyPowerAvg, h1) + getJsonNumber(hourlyPowerAvg, h2)) / 2
-        ).toFixed(4)
-      ),
+      avg_power_w: {
+        [h1]: Number(getJsonNumber(hourlyPowerAvg, h1).toFixed(4)),
+        [h2]: Number(getJsonNumber(hourlyPowerAvg, h2).toFixed(4)),
+      },
     });
   }
 
