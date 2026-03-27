@@ -57,6 +57,13 @@ function addDays(dateStr, days) {
   return d.toISOString().slice(0, 10);
 }
 
+function addMonths(dateStr, months) {
+  const { year, month, day } = parseDateOnly(dateStr);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+
 function getDayOfWeekSunday0(dateStr) {
   const { year, month, day } = parseDateOnly(dateStr);
   return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
@@ -132,6 +139,52 @@ function getJsonNumber(obj, key) {
   return Number(value || 0);
 }
 
+function buildDailyChartData(row) {
+  const hourlyKwh = row?.hourly_kwh || {};
+  const hourlyPowerAvg = row?.hourly_power_w_avg || {};
+
+  const data = [];
+  for (let h = 0; h < 24; h += 2) {
+    const h1 = `${String(h).padStart(2, "0")}:00`;
+    const h2 = `${String(h + 1).padStart(2, "0")}:00`;
+
+    data.push({
+      label: formatHourLabel(h),
+      start_hour: h1,
+      end_hour: h2,
+      energy_kwh: Number(
+        (getJsonNumber(hourlyKwh, h1) + getJsonNumber(hourlyKwh, h2)).toFixed(6)
+      ),
+      avg_power_w: Number(
+        (
+          (getJsonNumber(hourlyPowerAvg, h1) + getJsonNumber(hourlyPowerAvg, h2)) / 2
+        ).toFixed(4)
+      ),
+    });
+  }
+
+  return data;
+}
+
+function buildCurrentDailySummary(row, date, tz) {
+  return {
+    date,
+    total_energy_kwh: Number(row?.total_energy_kwh || 0),
+    avg_power_w: Number(row?.avg_power_w || 0),
+    avg_voltage: Number(row?.avg_voltage || 0),
+    avg_current: Number(row?.avg_current || 0),
+    data: buildDailyChartData(row),
+    timezone: tz,
+  };
+}
+
+function buildPreviousDailySummary(row, date) {
+  return {
+    date,
+    total_energy_kwh: Number(row?.total_energy_kwh || 0),
+  };
+}
+
 router.get("/", (_req, res) => {
   res.json({ ok: true, message: "API root works" });
 });
@@ -158,43 +211,20 @@ router.get("/power/daily", async (req, res) => {
   try {
     const tz = req.query.tz || DEFAULT_TZ;
     const date = getDateString(req.query.date, tz);
+    const previousDate = addDays(date, -1);
 
-    const row = await fetchDailyAggregateRow(date);
-
-    const hourlyKwh = row?.hourly_kwh || {};
-    const hourlyPowerAvg = row?.hourly_power_w_avg || {};
-
-    const data = [];
-    for (let h = 0; h < 24; h += 2) {
-      const h1 = `${String(h).padStart(2, "0")}:00`;
-      const h2 = `${String(h + 1).padStart(2, "0")}:00`;
-
-      data.push({
-        label: formatHourLabel(h),
-        start_hour: h1,
-        end_hour: h2,
-        energy_kwh: Number(
-          (getJsonNumber(hourlyKwh, h1) + getJsonNumber(hourlyKwh, h2)).toFixed(6)
-        ),
-        avg_power_w: Number(
-          (
-            (getJsonNumber(hourlyPowerAvg, h1) + getJsonNumber(hourlyPowerAvg, h2)) / 2
-          ).toFixed(4)
-        ),
-      });
-    }
+    const [currentRow, previousRow] = await Promise.all([
+      fetchDailyAggregateRow(date),
+      fetchDailyAggregateRow(previousDate),
+    ]);
 
     res.json({
       period: "daily",
       metric: "energy_kwh",
       source_table: DAILY_TABLE,
-      date,
       timezone: tz,
-      total_energy_kwh: Number(row?.total_energy_kwh || 0),
-      avg_power_w: Number(row?.avg_power_w || 0),
-      avg_voltage: Number(row?.avg_voltage || 0),
-      avg_current: Number(row?.avg_current || 0),
-      data,
+      current: buildCurrentDailySummary(currentRow, date, tz),
+      previous: buildPreviousDailySummary(previousRow, previousDate),
     });
   } catch (err) {
     res.status(500).json({
@@ -210,45 +240,72 @@ router.get("/power/weekly", async (req, res) => {
     const anchorDate = getDateString(req.query.date, tz);
 
     const dow = getDayOfWeekSunday0(anchorDate);
-    const sunday = addDays(anchorDate, -dow);
-    const nextSunday = addDays(sunday, 7);
+    const currentWeekStart = addDays(anchorDate, -dow);
+    const nextCurrentWeekStart = addDays(currentWeekStart, 7);
+    const previousWeekStart = addDays(currentWeekStart, -7);
 
-    const rows = await fetchDailyAggregateRows(sunday, nextSunday);
+    const rows = await fetchDailyAggregateRows(previousWeekStart, nextCurrentWeekStart);
 
     const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const rowMap = {};
-    let totalEnergy = 0;
 
     for (const row of rows) {
       rowMap[row.reading_date] = row;
-      totalEnergy += Number(row.total_energy_kwh || 0);
     }
 
-    const data = [];
-    for (let i = 0; i < 7; i++) {
-      const d = addDays(sunday, i);
-      const row = rowMap[d];
+    function buildCurrentWeekData(weekStart) {
+      let totalEnergy = 0;
+      const data = [];
 
-      data.push({
-        label: labels[i],
-        date: d,
-        energy_kwh: Number(row?.total_energy_kwh || 0),
-        avg_power_w: Number(row?.avg_power_w || 0),
-        avg_voltage: Number(row?.avg_voltage || 0),
-        avg_current: Number(row?.avg_current || 0),
-      });
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(weekStart, i);
+        const row = rowMap[d];
+        const energy = Number(row?.total_energy_kwh || 0);
+
+        totalEnergy += energy;
+
+        data.push({
+          label: labels[i],
+          date: d,
+          energy_kwh: energy,
+          avg_power_w: Number(row?.avg_power_w || 0),
+          avg_voltage: Number(row?.avg_voltage || 0),
+          avg_current: Number(row?.avg_current || 0),
+        });
+      }
+
+      return {
+        weekStart,
+        weekEnd: addDays(weekStart, 6),
+        total_energy_kwh: Number(totalEnergy.toFixed(4)),
+        data,
+      };
+    }
+
+    function buildPreviousWeekData(weekStart) {
+      let totalEnergy = 0;
+
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(weekStart, i);
+        const row = rowMap[d];
+        totalEnergy += Number(row?.total_energy_kwh || 0);
+      }
+
+      return {
+        weekStart,
+        weekEnd: addDays(weekStart, 6),
+        total_energy_kwh: Number(totalEnergy.toFixed(4)),
+      };
     }
 
     res.json({
       period: "weekly",
       metric: "energy_kwh",
       source_table: DAILY_TABLE,
-      anchorDate,
-      weekStart: sunday,
-      weekEnd: addDays(sunday, 6),
       timezone: tz,
-      total_energy_kwh: Number(totalEnergy.toFixed(4)),
-      data,
+      anchorDate,
+      current: buildCurrentWeekData(currentWeekStart),
+      previous: buildPreviousWeekData(previousWeekStart),
     });
   } catch (err) {
     console.error("weekly route error:", err);
@@ -265,42 +322,72 @@ router.get("/power/monthly", async (req, res) => {
     const anchorDate = getDateString(req.query.date, tz);
 
     const { monthStart, nextMonthStart, lastDay } = getMonthBounds(anchorDate);
+    const previousMonthAnchor = addMonths(monthStart, -1);
+    const {
+      monthStart: previousMonthStart,
+      lastDay: previousLastDay,
+    } = getMonthBounds(previousMonthAnchor);
 
-    const rows = await fetchDailyAggregateRows(monthStart, nextMonthStart);
+    const rows = await fetchDailyAggregateRows(previousMonthStart, nextMonthStart);
 
     const rowMap = {};
-    let totalEnergy = 0;
-
     for (const row of rows) {
       rowMap[row.reading_date] = row;
-      totalEnergy += Number(row.total_energy_kwh || 0);
     }
 
-    const data = [];
-    for (let day = 1; day <= lastDay; day++) {
-      const d = `${monthStart.slice(0, 8)}${String(day).padStart(2, "0")}`;
-      const row = rowMap[d];
+    function buildCurrentMonthData(startDate, totalDays) {
+      let totalEnergy = 0;
+      const data = [];
 
-      data.push({
-        label: String(day),
-        date: d,
-        energy_kwh: Number(row?.total_energy_kwh || 0),
-        avg_power_w: Number(row?.avg_power_w || 0),
-        avg_voltage: Number(row?.avg_voltage || 0),
-        avg_current: Number(row?.avg_current || 0),
-      });
+      for (let day = 1; day <= totalDays; day++) {
+        const d = `${startDate.slice(0, 8)}${String(day).padStart(2, "0")}`;
+        const row = rowMap[d];
+        const energy = Number(row?.total_energy_kwh || 0);
+
+        totalEnergy += energy;
+
+        data.push({
+          label: String(day),
+          date: d,
+          energy_kwh: energy,
+          avg_power_w: Number(row?.avg_power_w || 0),
+          avg_voltage: Number(row?.avg_voltage || 0),
+          avg_current: Number(row?.avg_current || 0),
+        });
+      }
+
+      return {
+        monthStart: startDate,
+        monthEnd: `${startDate.slice(0, 8)}${String(totalDays).padStart(2, "0")}`,
+        total_energy_kwh: Number(totalEnergy.toFixed(4)),
+        data,
+      };
+    }
+
+    function buildPreviousMonthData(startDate, totalDays) {
+      let totalEnergy = 0;
+
+      for (let day = 1; day <= totalDays; day++) {
+        const d = `${startDate.slice(0, 8)}${String(day).padStart(2, "0")}`;
+        const row = rowMap[d];
+        totalEnergy += Number(row?.total_energy_kwh || 0);
+      }
+
+      return {
+        monthStart: startDate,
+        monthEnd: `${startDate.slice(0, 8)}${String(totalDays).padStart(2, "0")}`,
+        total_energy_kwh: Number(totalEnergy.toFixed(4)),
+      };
     }
 
     res.json({
       period: "monthly",
       metric: "energy_kwh",
       source_table: DAILY_TABLE,
-      anchorDate,
-      monthStart,
-      monthEnd: `${monthStart.slice(0, 8)}${String(lastDay).padStart(2, "0")}`,
       timezone: tz,
-      total_energy_kwh: Number(totalEnergy.toFixed(4)),
-      data,
+      anchorDate,
+      current: buildCurrentMonthData(monthStart, lastDay),
+      previous: buildPreviousMonthData(previousMonthStart, previousLastDay),
     });
   } catch (err) {
     res.status(500).json({
