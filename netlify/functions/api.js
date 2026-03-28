@@ -433,6 +433,80 @@ router.get("/appliance-stats/daily", async (req, res) => {
   }
 });
 
+router.get("/appliance-stats/weekly", async (req, res) => {
+  try {
+    const tz = req.query.tz || DEFAULT_TZ;
+    const anchorDate = getDateString(req.query.date, tz);
+
+    const dow = getDayOfWeekSunday0(anchorDate);
+    const weekStart = addDays(anchorDate, -dow);
+    const nextWeekStart = addDays(weekStart, 7);
+
+    const { data, error } = await supabase
+      .from("appliance_stats_daily")
+      .select(`
+        reading_date,
+        appliance_label,
+        total_energy_kwh,
+        total_duration_sec,
+        total_nilm_event_count,
+        total_manual_app_count
+      `)
+      .gte("reading_date", weekStart)
+      .lt("reading_date", nextWeekStart)
+      .order("reading_date", { ascending: true })
+      .order("appliance_label", { ascending: true });
+
+    if (error) throw error;
+
+    const grouped = {};
+
+    for (const row of data || []) {
+      const label = row.appliance_label || "Unknown";
+
+      if (!grouped[label]) {
+        grouped[label] = {
+          appliance_label: label,
+          total_energy_kwh: 0,
+          total_duration_sec: 0,
+          total_nilm_event_count: 0,
+          total_manual_app_count: 0,
+        };
+      }
+
+      grouped[label].total_energy_kwh += Number(row.total_energy_kwh || 0);
+      grouped[label].total_duration_sec += Number(row.total_duration_sec || 0);
+      grouped[label].total_nilm_event_count += Number(row.total_nilm_event_count || 0);
+      grouped[label].total_manual_app_count += Number(row.total_manual_app_count || 0);
+    }
+
+    const weeklyData = Object.values(grouped)
+      .map((row) => ({
+        appliance_label: row.appliance_label,
+        total_energy_kwh: Number(row.total_energy_kwh.toFixed(6)),
+        total_duration_sec: Number(row.total_duration_sec.toFixed(0)),
+        total_nilm_event_count: row.total_nilm_event_count,
+        total_manual_app_count: row.total_manual_app_count,
+      }))
+      .sort((a, b) => a.appliance_label.localeCompare(b.appliance_label));
+
+    res.json({
+      period: "weekly",
+      source_table: "appliance_stats_daily",
+      anchorDate,
+      weekStart,
+      weekEnd: addDays(weekStart, 6),
+      timezone: tz,
+      data: weeklyData,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
 app.use("/.netlify/functions/api", router);
 
 module.exports.handler = serverless(app);
