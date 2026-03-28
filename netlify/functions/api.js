@@ -396,6 +396,43 @@ router.get("/power/monthly", async (req, res) => {
   }
 });
 
+router.get("/appliance-stats/daily", async (req, res) => {
+  try {
+    const tz = req.query.tz || DEFAULT_TZ;
+    const date = getDateString(req.query.date, tz);
+
+    const { data, error } = await supabase
+      .from("appliance_stats_daily")
+      .select(`
+        reading_date,
+        appliance_label,
+        total_energy_kwh,
+        total_duration_sec,
+        hourly_energy_kwh_profile,
+        hourly_duration_sec_profile,
+        total_nilm_event_count,
+        total_manual_app_count
+      `)
+      .eq("reading_date", date)
+      .order("appliance_label", { ascending: true });
+
+    if (error) throw error;
+
+    res.json({
+      period: "daily",
+      source_table: "appliance_stats_daily",
+      date,
+      timezone: tz,
+      data: data || [],
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
 app.use("/.netlify/functions/api", router);
 
 module.exports.handler = serverless(app);
