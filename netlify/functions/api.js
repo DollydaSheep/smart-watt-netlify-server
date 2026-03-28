@@ -399,7 +399,7 @@ router.get("/power/monthly", async (req, res) => {
 router.get("/appliance-stats/daily", async (req, res) => {
   try {
     const tz = req.query.tz || DEFAULT_TZ;
-    const date = "2026-03-18";
+    const date = getDateString(req.query.date, tz);
 
     const { data, error } = await supabase
       .from("appliance_stats_daily")
