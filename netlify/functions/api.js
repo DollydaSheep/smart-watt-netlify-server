@@ -467,26 +467,23 @@ router.get("/appliance-stats/weekly", async (req, res) => {
       if (!grouped[label]) {
         grouped[label] = {
           appliance_label: label,
-          total_energy_kwh: 0,
-          total_duration_sec: 0,
-          total_nilm_event_count: 0,
-          total_manual_app_count: 0,
+          data: [],
         };
       }
 
-      grouped[label].total_energy_kwh += Number(row.total_energy_kwh || 0);
-      grouped[label].total_duration_sec += Number(row.total_duration_sec || 0);
-      grouped[label].total_nilm_event_count += Number(row.total_nilm_event_count || 0);
-      grouped[label].total_manual_app_count += Number(row.total_manual_app_count || 0);
+      grouped[label].data.push({
+        date: row.reading_date,
+        total_energy_kwh: Number(row.total_energy_kwh || 0),
+        total_duration_sec: Number(row.total_duration_sec || 0),
+        total_nilm_event_count: Number(row.total_nilm_event_count || 0),
+        total_manual_app_count: Number(row.total_manual_app_count || 0),
+      });
     }
 
     const weeklyData = Object.values(grouped)
       .map((row) => ({
         appliance_label: row.appliance_label,
-        total_energy_kwh: Number(row.total_energy_kwh.toFixed(6)),
-        total_duration_sec: Number(row.total_duration_sec.toFixed(0)),
-        total_nilm_event_count: row.total_nilm_event_count,
-        total_manual_app_count: row.total_manual_app_count,
+        data: row.data,
       }))
       .sort((a, b) => a.appliance_label.localeCompare(b.appliance_label));
 
